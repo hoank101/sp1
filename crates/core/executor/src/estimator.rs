@@ -1,3 +1,7 @@
+//! Data that may be collected during execution and used to estimate trace area.
+
+use std::ops::AddAssign;
+
 use enum_map::EnumMap;
 use hashbrown::HashMap;
 use sp1_stark::SP1CoreOpts;
@@ -6,21 +10,28 @@ use crate::RiscvAirId;
 
 const BYTE_NUM_ROWS: u64 = 1 << 16;
 
-#[derive(Default, Clone)]
+/// Data accumulated during execution to estimate the core trace area used to prove the execution.
+#[derive(Clone, Debug, Default)]
 pub struct TraceAreaEstimator {
-    pub core_area: u64,
+    /// Core shards, represented by the number of events per AIR.
+    pub core_shards: Vec<EnumMap<RiscvAirId, u64>>,
+    /// Deferred events, which are used to calculate trace area after execution has finished.
     pub deferred_events: EnumMap<RiscvAirId, u64>,
 }
 
 impl TraceAreaEstimator {
     /// An estimate of the total trace area required for the core proving stage.
     /// This provides a prover gas metric.
+    #[must_use]
+    #[deprecated]
     pub fn total_trace_area(
         &self,
         program_len: usize,
         costs: &HashMap<RiscvAirId, u64>,
         opts: &SP1CoreOpts,
     ) -> u64 {
+        let core_area = 0u64;
+
         let deferred_area = self
             .deferred_events
             .iter()
@@ -52,21 +63,18 @@ impl TraceAreaEstimator {
         // // Compute the program chip contribution.
         let program_area = program_len as u64 * costs[&RiscvAirId::Program];
 
-        self.core_area + deferred_area + byte_area + program_area
+        core_area + deferred_area + byte_area + program_area
     }
+}
 
-    /// Mark the end of a shard. Estimates the area of core AIRs and defers appropriate counts.
-    pub(crate) fn flush_shard(
-        &mut self,
-        event_counts: &EnumMap<RiscvAirId, u64>,
-        costs: &HashMap<RiscvAirId, u64>,
-    ) {
-        for (id, count) in event_counts {
-            if id.is_deferred() {
-                self.deferred_events[id] += count;
-            } else {
-                self.core_area += costs[&id] * count.next_power_of_two();
-            }
-        }
+impl AddAssign for TraceAreaEstimator {
+    fn add_assign(&mut self, rhs: Self) {
+        let TraceAreaEstimator { core_shards, deferred_events } = self;
+        core_shards.extend(rhs.core_shards);
+        deferred_events
+            .as_mut_array()
+            .iter_mut()
+            .zip(rhs.deferred_events.as_array())
+            .for_each(|(l, r)| *l += r);
     }
 }
